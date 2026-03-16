@@ -1,3 +1,10 @@
+# Rust
+target/
+*.db
+*.db-wal
+*.db-shm
+Cargo.lock
+
 # Python
 __pycache__/
 *.py[cod]
