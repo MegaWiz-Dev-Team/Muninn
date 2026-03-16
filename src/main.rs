@@ -9,7 +9,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
 mod db;
+mod fixer;
 mod health;
+mod llm;
 mod models;
 mod watcher;
 
