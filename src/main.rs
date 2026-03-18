@@ -7,6 +7,7 @@ use axum::{
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod code_agent;
 mod config;
 mod db;
 mod fixer;
@@ -55,6 +56,7 @@ async fn main() {
         .route("/healthz", get(health::health_check))
         .route("/api/issues", get(watcher::api::list_issues))
         .route("/api/issues/{id}", get(watcher::api::get_issue))
+        .route("/api/issues/{id}/fix", axum::routing::post(watcher::api::trigger_fix))
         .route("/api/stats", get(watcher::api::get_stats))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
