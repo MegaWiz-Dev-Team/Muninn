@@ -42,6 +42,8 @@ pub async fn poll_repo(state: &Arc<AppState>, repo: &str) -> Result<(), String> 
             fix_branch: None,
             fix_pr_url: None,
             error: None,
+            fix_diff: None,
+            fix_analysis: None,
         };
 
         if let Err(e) = state.db.upsert_issue(&tracked) {

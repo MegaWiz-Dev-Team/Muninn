@@ -32,6 +32,8 @@ impl Database {
                 fix_branch TEXT,
                 fix_pr_url TEXT,
                 error TEXT,
+                fix_diff TEXT,
+                fix_analysis TEXT,
                 UNIQUE(repo, issue_number)
             );
 
@@ -56,6 +58,11 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_issues_repo ON tracked_issues(repo);
             CREATE INDEX IF NOT EXISTS idx_fixes_issue ON fixes(issue_id);"
         )?;
+
+        // Forward-compatible migration for existing DBs
+        let _ = conn.execute("ALTER TABLE tracked_issues ADD COLUMN fix_diff TEXT", []);
+        let _ = conn.execute("ALTER TABLE tracked_issues ADD COLUMN fix_analysis TEXT", []);
+
         Ok(())
     }
 
@@ -64,8 +71,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let labels_json = serde_json::to_string(&issue.labels).unwrap_or_default();
         conn.execute(
-            "INSERT INTO tracked_issues (id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            "INSERT INTO tracked_issues (id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error, fix_diff, fix_analysis)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(repo, issue_number) DO UPDATE SET
                 title = excluded.title,
                 body = excluded.body,
@@ -78,6 +85,7 @@ impl Database {
                 issue.priority.to_string(), issue.status.to_string(),
                 issue.created_at.to_rfc3339(), issue.updated_at.to_rfc3339(),
                 issue.fix_branch, issue.fix_pr_url, issue.error,
+                issue.fix_diff, issue.fix_analysis,
             ],
         )?;
         Ok(())
@@ -93,11 +101,21 @@ impl Database {
         Ok(())
     }
 
+    /// Save fix diff and analysis for review
+    pub fn update_issue_fix_diff(&self, id: &str, diff: &str, analysis: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tracked_issues SET fix_diff = ?1, fix_analysis = ?2, status = 'review_pending', updated_at = ?3 WHERE id = ?4",
+            params![diff, analysis, chrono::Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
     /// Get issue by ID
     pub fn get_issue(&self, id: &str) -> Result<Option<TrackedIssue>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error
+            "SELECT id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error, fix_diff, fix_analysis
              FROM tracked_issues WHERE id = ?1"
         )?;
         stmt.query_row(params![id], |row| Self::row_to_issue(row)).optional()
@@ -119,11 +137,11 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let (query, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match status_filter {
             Some(s) => (
-                "SELECT id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error FROM tracked_issues WHERE status = ?1 ORDER BY updated_at DESC",
+                "SELECT id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error, fix_diff, fix_analysis FROM tracked_issues WHERE status = ?1 ORDER BY updated_at DESC",
                 vec![Box::new(s.to_string())],
             ),
             None => (
-                "SELECT id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error FROM tracked_issues ORDER BY updated_at DESC",
+                "SELECT id, repo, issue_number, title, body, labels, priority, status, created_at, updated_at, fix_branch, fix_pr_url, error, fix_diff, fix_analysis FROM tracked_issues ORDER BY updated_at DESC",
                 vec![],
             ),
         };
@@ -175,6 +193,8 @@ impl Database {
             fix_branch: row.get(10)?,
             fix_pr_url: row.get(11)?,
             error: row.get(12)?,
+            fix_diff: row.get(13)?,
+            fix_analysis: row.get(14)?,
         })
     }
 }
@@ -210,6 +230,8 @@ mod tests {
             fix_branch: None,
             fix_pr_url: None,
             error: None,
+            fix_diff: None,
+            fix_analysis: None,
         }
     }
 
@@ -317,5 +339,85 @@ mod tests {
         let result = db.get_issue("lab-1").unwrap().unwrap();
         assert_eq!(result.labels.len(), 2);
         assert!(result.labels.contains(&"severity:critical".to_string()));
+    }
+
+    // ── TDD: Review mode DB operations ──
+
+    #[test]
+    fn test_update_issue_fix_diff() {
+        let db = test_db();
+        let issue = sample_issue("review-1", "repo", 100);
+        db.upsert_issue(&issue).unwrap();
+
+        let diff = "-allow_origins(Any)\n+allow_origins([origin])";
+        let analysis = "Replace wildcard CORS with specific origins";
+        db.update_issue_fix_diff("review-1", diff, analysis).unwrap();
+
+        let updated = db.get_issue("review-1").unwrap().unwrap();
+        assert_eq!(updated.status, AnalysisStatus::ReviewPending);
+        assert_eq!(updated.fix_diff.as_deref(), Some(diff));
+        assert_eq!(updated.fix_analysis.as_deref(), Some(analysis));
+    }
+
+    #[test]
+    fn test_fix_diff_none_by_default() {
+        let db = test_db();
+        let issue = sample_issue("nodiff-1", "repo", 101);
+        db.upsert_issue(&issue).unwrap();
+
+        let result = db.get_issue("nodiff-1").unwrap().unwrap();
+        assert!(result.fix_diff.is_none());
+        assert!(result.fix_analysis.is_none());
+    }
+
+    #[test]
+    fn test_review_pending_to_fixing() {
+        let db = test_db();
+        let issue = sample_issue("flow-1", "repo", 102);
+        db.upsert_issue(&issue).unwrap();
+
+        // Simulate review flow: pending → review_pending → fixing → fixed
+        db.update_issue_fix_diff("flow-1", "diff", "analysis").unwrap();
+        let i = db.get_issue("flow-1").unwrap().unwrap();
+        assert_eq!(i.status, AnalysisStatus::ReviewPending);
+
+        db.update_issue_status("flow-1", &AnalysisStatus::Fixing).unwrap();
+        let i = db.get_issue("flow-1").unwrap().unwrap();
+        assert_eq!(i.status, AnalysisStatus::Fixing);
+
+        db.update_issue_status("flow-1", &AnalysisStatus::Fixed).unwrap();
+        let i = db.get_issue("flow-1").unwrap().unwrap();
+        assert_eq!(i.status, AnalysisStatus::Fixed);
+    }
+
+    #[test]
+    fn test_review_pending_to_skipped_on_reject() {
+        let db = test_db();
+        let issue = sample_issue("reject-1", "repo", 103);
+        db.upsert_issue(&issue).unwrap();
+
+        db.update_issue_fix_diff("reject-1", "diff", "analysis").unwrap();
+        db.update_issue_status("reject-1", &AnalysisStatus::Skipped).unwrap();
+
+        let i = db.get_issue("reject-1").unwrap().unwrap();
+        assert_eq!(i.status, AnalysisStatus::Skipped);
+        // fix_diff should still be preserved even after rejection
+        assert!(i.fix_diff.is_some());
+    }
+
+    #[test]
+    fn test_list_review_pending_issues() {
+        let db = test_db();
+        db.upsert_issue(&sample_issue("rp-1", "repo", 200)).unwrap();
+        db.upsert_issue(&sample_issue("rp-2", "repo", 201)).unwrap();
+        db.update_issue_fix_diff("rp-1", "diff1", "analysis1").unwrap();
+
+        let review = db.list_issues(Some("review_pending")).unwrap();
+        assert_eq!(review.len(), 1);
+        assert_eq!(review[0].id, "rp-1");
+
+        let pending = db.list_issues(Some("pending")).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "rp-2");
     }
 }

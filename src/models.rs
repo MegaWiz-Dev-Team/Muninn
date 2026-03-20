@@ -30,6 +30,8 @@ pub enum AnalysisStatus {
     Pending,
     Analyzing,
     Analyzed,
+    #[serde(rename = "review_pending")]
+    ReviewPending,
     Fixing,
     Fixed,
     Skipped,
@@ -42,6 +44,7 @@ impl fmt::Display for AnalysisStatus {
             AnalysisStatus::Pending => write!(f, "pending"),
             AnalysisStatus::Analyzing => write!(f, "analyzing"),
             AnalysisStatus::Analyzed => write!(f, "analyzed"),
+            AnalysisStatus::ReviewPending => write!(f, "review_pending"),
             AnalysisStatus::Fixing => write!(f, "fixing"),
             AnalysisStatus::Fixed => write!(f, "fixed"),
             AnalysisStatus::Skipped => write!(f, "skipped"),
@@ -55,6 +58,7 @@ impl AnalysisStatus {
         match s {
             "analyzing" => Self::Analyzing,
             "analyzed" => Self::Analyzed,
+            "review_pending" => Self::ReviewPending,
             "fixing" => Self::Fixing,
             "fixed" => Self::Fixed,
             "skipped" => Self::Skipped,
@@ -94,6 +98,10 @@ pub struct TrackedIssue {
     pub fix_pr_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_diff: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_analysis: Option<String>,
 }
 
 /// GitHub issue from API (simplified)
@@ -199,11 +207,18 @@ mod tests {
 
     #[test]
     fn test_analysis_status_roundtrip() {
-        let statuses = ["pending", "analyzing", "analyzed", "fixing", "fixed", "skipped", "failed"];
+        let statuses = ["pending", "analyzing", "analyzed", "review_pending", "fixing", "fixed", "skipped", "failed"];
         for s in statuses {
             let status = AnalysisStatus::from_str(s);
             assert_eq!(status.to_string(), s);
         }
+    }
+
+    #[test]
+    fn test_review_pending_status() {
+        let status = AnalysisStatus::ReviewPending;
+        assert_eq!(status.to_string(), "review_pending");
+        assert_eq!(AnalysisStatus::from_str("review_pending"), AnalysisStatus::ReviewPending);
     }
 
     // ── Serialization tests ──
@@ -224,11 +239,43 @@ mod tests {
             fix_branch: None,
             fix_pr_url: None,
             error: None,
+            fix_diff: None,
+            fix_analysis: None,
         };
         let json = serde_json::to_string(&issue).unwrap();
         assert!(json.contains("SQL Injection"));
         assert!(json.contains("\"priority\":\"high\""));
         // None fields should be omitted
         assert!(!json.contains("fix_branch"));
+        assert!(!json.contains("fix_diff"));
+        assert!(!json.contains("fix_analysis"));
+    }
+
+    // ── TDD: fix_diff + fix_analysis serialization ──
+
+    #[test]
+    fn test_fix_diff_serialization_when_present() {
+        let issue = TrackedIssue {
+            id: "diff-1".to_string(),
+            repo: "MegaWiz-Dev-Team/Bifrost".to_string(),
+            issue_number: 9,
+            title: "CORS wildcard origin".to_string(),
+            body: "Permissive CORS".to_string(),
+            labels: vec!["huginn-finding".to_string(), "security".to_string()],
+            priority: IssuePriority::High,
+            status: AnalysisStatus::ReviewPending,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            fix_branch: None,
+            fix_pr_url: None,
+            error: None,
+            fix_diff: Some("-allow_origins(Any)\n+allow_origins([origin])".to_string()),
+            fix_analysis: Some("Replace CorsLayer::permissive with specific origins".to_string()),
+        };
+        let json = serde_json::to_string(&issue).unwrap();
+        assert!(json.contains("fix_diff"));
+        assert!(json.contains("fix_analysis"));
+        assert!(json.contains("review_pending"));  // serde(rename = "review_pending")
+        assert!(json.contains("allow_origins"));
     }
 }

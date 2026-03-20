@@ -6,7 +6,7 @@ use crate::AppState;
 use crate::models::AnalysisStatus;
 use crate::code_agent::{self, CodeAgentConfig, CodeAgentProvider};
 
-/// Process pending issues: analyze → generate fix → create PR
+/// Process pending issues: analyze → generate fix → create PR (or review)
 pub async fn process_pending_issues(state: Arc<AppState>) {
     let issues = match state.db.list_issues(Some("pending")) {
         Ok(issues) => issues,
@@ -22,11 +22,21 @@ pub async fn process_pending_issues(state: Arc<AppState>) {
 
     tracing::info!("🔧 Processing {} pending issues", issues.len());
 
-    let llm = crate::llm::LlmClient::new(
+    let llm = crate::llm::LlmClient::with_config(
         state.http.clone(),
         &state.config.heimdall_url,
         &state.config.gemini_api_key,
+        &state.config.llm_provider,
+        &state.config.llm_model,
+        &state.config.gemini_model,
+        state.config.llm_temperature,
+        state.config.llm_max_tokens,
     );
+
+    let review_mode = state.config.is_review_mode();
+    if review_mode {
+        tracing::info!("👁️ Review mode: fixes will be saved for approval");
+    }
 
     // Determine code agent provider
     let agent_provider = CodeAgentProvider::from_str(&state.config.code_agent_provider);

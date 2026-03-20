@@ -57,7 +57,10 @@ async fn main() {
         .route("/api/issues", get(watcher::api::list_issues))
         .route("/api/issues/{id}", get(watcher::api::get_issue))
         .route("/api/issues/{id}/fix", axum::routing::post(watcher::api::trigger_fix))
+        .route("/api/issues/{id}/approve", axum::routing::post(watcher::api::approve_fix))
+        .route("/api/issues/{id}/reject", axum::routing::post(watcher::api::reject_fix))
         .route("/api/stats", get(watcher::api::get_stats))
+        .route("/api/config", get(watcher::api::get_config))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state);

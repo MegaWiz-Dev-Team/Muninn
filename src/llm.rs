@@ -5,6 +5,11 @@ pub struct LlmClient {
     http: reqwest::Client,
     heimdall_url: String,
     gemini_api_key: String,
+    llm_provider: String,
+    llm_model: String,
+    gemini_model: String,
+    temperature: f32,
+    max_tokens: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +40,15 @@ struct ChatChoice {
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
     contents: Vec<GeminiContent>,
+    #[serde(rename = "generationConfig")]
+    generation_config: GeminiGenerationConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiGenerationConfig {
+    temperature: f32,
+    #[serde(rename = "maxOutputTokens")]
+    max_output_tokens: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,36 +77,72 @@ impl LlmClient {
             http,
             heimdall_url: heimdall_url.to_string(),
             gemini_api_key: gemini_api_key.to_string(),
+            llm_provider: "both".to_string(),
+            llm_model: "default".to_string(),
+            gemini_model: "gemini-2.5-flash".to_string(),
+            temperature: 0.1,
+            max_tokens: 8192,
         }
     }
 
-    /// Send a chat completion request — tries Heimdall first, falls back to Gemini
+    pub fn with_config(
+        http: reqwest::Client,
+        heimdall_url: &str,
+        gemini_api_key: &str,
+        llm_provider: &str,
+        llm_model: &str,
+        gemini_model: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Self {
+        Self {
+            http,
+            heimdall_url: heimdall_url.to_string(),
+            gemini_api_key: gemini_api_key.to_string(),
+            llm_provider: llm_provider.to_string(),
+            llm_model: llm_model.to_string(),
+            gemini_model: gemini_model.to_string(),
+            temperature,
+            max_tokens,
+        }
+    }
+
+    /// Send a chat completion request — respects LLM_PROVIDER config
     pub async fn chat(&self, system_prompt: &str, user_message: &str) -> Result<String, String> {
-        // Try Heimdall first (local, faster)
-        if !self.heimdall_url.is_empty() {
-            match self.chat_heimdall(system_prompt, user_message).await {
-                Ok(response) => return Ok(response),
-                Err(e) => tracing::warn!("Heimdall unavailable, falling back to Gemini: {}", e),
+        let provider = self.llm_provider.to_lowercase();
+
+        match provider.as_str() {
+            "heimdall" => {
+                self.chat_heimdall(system_prompt, user_message).await
+            }
+            "gemini" => {
+                self.chat_gemini(system_prompt, user_message).await
+            }
+            _ => {
+                // "both" — try Heimdall first, fallback to Gemini
+                if !self.heimdall_url.is_empty() {
+                    match self.chat_heimdall(system_prompt, user_message).await {
+                        Ok(response) => return Ok(response),
+                        Err(e) => tracing::warn!("Heimdall unavailable, falling back to Gemini: {}", e),
+                    }
+                }
+                if !self.gemini_api_key.is_empty() {
+                    return self.chat_gemini(system_prompt, user_message).await;
+                }
+                Err("No LLM provider configured (set HEIMDALL_URL or GEMINI_API_KEY)".to_string())
             }
         }
-
-        // Fallback to Gemini
-        if !self.gemini_api_key.is_empty() {
-            return self.chat_gemini(system_prompt, user_message).await;
-        }
-
-        Err("No LLM provider configured (set HEIMDALL_URL or GEMINI_API_KEY)".to_string())
     }
 
     async fn chat_heimdall(&self, system_prompt: &str, user_message: &str) -> Result<String, String> {
         let request = ChatRequest {
-            model: "default".to_string(),
+            model: self.llm_model.clone(),
             messages: vec![
                 ChatMessage { role: "system".to_string(), content: system_prompt.to_string() },
                 ChatMessage { role: "user".to_string(), content: user_message.to_string() },
             ],
-            temperature: 0.2,
-            max_tokens: 4096,
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
         };
 
         let response = self.http
@@ -116,8 +166,8 @@ impl LlmClient {
 
     async fn chat_gemini(&self, system_prompt: &str, user_message: &str) -> Result<String, String> {
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
-            self.gemini_api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            self.gemini_model, self.gemini_api_key
         );
 
         let request = GeminiRequest {
@@ -126,6 +176,10 @@ impl LlmClient {
                     text: format!("{}\n\n{}", system_prompt, user_message),
                 }],
             }],
+            generation_config: GeminiGenerationConfig {
+                temperature: self.temperature,
+                max_output_tokens: self.max_tokens,
+            },
         };
 
         let response = self.http

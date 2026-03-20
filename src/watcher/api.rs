@@ -161,3 +161,76 @@ pub async fn trigger_fix(
     )
         .into_response()
 }
+
+/// POST /api/issues/:id/approve — approve a review_pending fix
+pub async fn approve_fix(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let issue = match state.db.get_issue(&id) {
+        Ok(Some(issue)) => issue,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Issue not found"}))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+    };
+
+    if issue.status != AnalysisStatus::ReviewPending {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "Issue is not in review_pending status",
+            "current_status": issue.status.to_string(),
+        }))).into_response();
+    }
+
+    let _ = state.db.update_issue_status(&id, &AnalysisStatus::Fixing);
+    tracing::info!("✅ Fix approved for {}#{}: {}", issue.repo, issue.issue_number, issue.title);
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "message": "Fix approved",
+        "issue_id": id,
+        "status": "fixing",
+    }))).into_response()
+}
+
+/// POST /api/issues/:id/reject — reject a proposed fix
+pub async fn reject_fix(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let issue = match state.db.get_issue(&id) {
+        Ok(Some(issue)) => issue,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Issue not found"}))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{}", e)}))).into_response(),
+    };
+
+    if issue.status != AnalysisStatus::ReviewPending {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "Issue is not in review_pending status",
+            "current_status": issue.status.to_string(),
+        }))).into_response();
+    }
+
+    let _ = state.db.update_issue_status(&id, &AnalysisStatus::Skipped);
+    tracing::info!("❌ Fix rejected for {}#{}: {}", issue.repo, issue.issue_number, issue.title);
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "message": "Fix rejected",
+        "issue_id": id,
+        "status": "skipped",
+    }))).into_response()
+}
+
+/// GET /api/config — return current config (non-sensitive)
+pub async fn get_config(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "fix_mode": state.config.fix_mode,
+        "llm_provider": state.config.llm_provider,
+        "llm_model": state.config.llm_model,
+        "gemini_model": state.config.gemini_model,
+        "llm_temperature": state.config.llm_temperature,
+        "llm_max_tokens": state.config.llm_max_tokens,
+        "code_agent_provider": state.config.code_agent_provider,
+        "poll_interval_secs": state.config.poll_interval_secs,
+        "watched_repos": state.config.watched_repos,
+    }))
+}
