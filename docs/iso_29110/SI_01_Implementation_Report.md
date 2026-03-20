@@ -2,8 +2,8 @@
 
 **Product:** 🐦 Muninn (Issue Watcher + Multi-Agent Auto-Fixer)
 **Document ID:** SI-RPT-MUNINN-001
-**Version:** 0.2.0
-**Date:** 2026-03-18
+**Version:** 0.3.0
+**Date:** 2026-03-20
 **Standard:** ISO/IEC 29110 — SI Process
 **Stack:** 🦀 Rust (Axum 0.8)
 
@@ -17,7 +17,7 @@
 | **Port** | `:8500` |
 | **Container** | `asgard_muninn` |
 | **Memory** | 30 MB idle / 64 MB limit |
-| **Dependencies** | Huginn (scan findings), Forseti (E2E test findings), Heimdall (LLM), Gemini API, GitHub API, OpenCode CLI, Gemini CLI |
+| **Dependencies** | Huginn (scan findings), Forseti (E2E test findings), Heimdall (LLM), Gemini API, GitHub API, OpenCode CLI, Gemini CLI, Odin (dashboard) |
 | **BRD** | `Asgard/docs/business/odins-ravens-brd.md` v2.1 |
 | **TRD** | `Asgard/docs/business/odins-ravens-trd.md` v1.1 |
 
@@ -64,9 +64,12 @@ flowchart TB
 | FR-M03 | Auto-Fixer (branch, code gen, PR, human review) | S2 | ✅ Done |
 | FR-M04 | Code Agent CLI (OpenCode + Gemini CLI integration) | S2 | ✅ Done |
 | FR-M05 | Manual Fix Trigger API (`POST /api/issues/{id}/fix`) | S2 | ✅ Done |
-| FR-M06 | Multi-Agent Fix Pipeline (4 agents) | S3 | 📋 Planned |
-| FR-M07 | Continuous Learning Agent | S4 | 📋 Planned |
-| FR-M08 | Forseti Integration (E2E test feedback loop) | S3 | 📋 Planned |
+| FR-M06 | Review Mode (approve/reject workflow via Odin) | S3 | ✅ Done |
+| FR-M07 | Configurable LLM (provider/model/temp/tokens) | S3 | ✅ Done |
+| FR-M08 | Odin API Endpoints (approve/reject/config) | S3 | ✅ Done |
+| FR-M09 | Multi-Agent Fix Pipeline (4 agents) | S4 | 📋 Planned |
+| FR-M10 | Continuous Learning Agent | S5 | 📋 Planned |
+| FR-M11 | Forseti Integration (E2E test feedback loop) | S4 | 📋 Planned |
 
 ---
 
@@ -76,8 +79,9 @@ flowchart TB
 |:--|:--|:--|:--|:--|
 | **S1** | 2 weeks | Foundation | ✅ Done | Scaffold, GitHub poller, label filter, SQLite, health API |
 | **S2** | 2 weeks | AI Fixer + Code Agent | ✅ Done | LLM analyzer, auto-fix PR, Code Agent CLI (OpenCode/Gemini), manual fix API |
-| **S3** | 2 weeks | Multi-Agent Pipeline | 📋 Planned | Analyzer→Coder→Reviewer→Tester agents, Forseti integration |
-| **S4** | 2 weeks | Continuous Learning | 📋 Planned | Pattern detection, playbook, trend analysis |
+| **S3** | 2 weeks | Review Mode + Odin | ✅ Done | Review mode, configurable LLM, approve/reject API, Odin dashboard integration |
+| **S4** | 2 weeks | Multi-Agent Pipeline | 📋 Planned | Analyzer→Coder→Reviewer→Tester agents, Forseti integration |
+| **S5** | 2 weeks | Continuous Learning | 📋 Planned | Pattern detection, playbook, trend analysis |
 
 ---
 
@@ -168,7 +172,10 @@ flowchart LR
 | `GET` | `/api/issues` | List tracked issues (filter: `?status=pending`) |
 | `GET` | `/api/issues/{id}` | Get issue details |
 | `POST` | `/api/issues/{id}/fix` | Trigger code agent fix manually |
+| `POST` | `/api/issues/{id}/approve` | Approve a review_pending fix (→ create PR) |
+| `POST` | `/api/issues/{id}/reject` | Reject a proposed fix (→ mark skipped) |
 | `GET` | `/api/stats` | Summary statistics |
+| `GET` | `/api/config` | Current configuration (non-sensitive) |
 
 ---
 
@@ -188,8 +195,10 @@ flowchart LR
 
 | Category | Tests | Status |
 |:--|:--|:--|
-| Unit tests | 60 | ✅ All pass |
-| Code Agent tests | 20 | ✅ All pass |
+| Unit tests | 76 | ✅ All pass |
+| Config tests (TDD) | 9 | ✅ Review mode, LLM config |
+| Models tests (TDD) | 3 | ✅ ReviewPending, fix_diff serialization |
+| DB tests (TDD) | 5 | ✅ fix_diff CRUD, status transitions |
 | Lint (clippy) | — | ✅ Pass |
 
 | Category | Method | Tool |
@@ -212,6 +221,12 @@ flowchart LR
 | `POLL_INTERVAL_SECS` | `300` | Poll interval |
 | `HEIMDALL_URL` | `http://host.docker.internal:8080` | Local LLM |
 | `GEMINI_API_KEY` | — | Gemini API fallback |
+| `FIX_MODE` | `review` | `review` (approval required) / `auto` (auto-PR) |
+| `LLM_PROVIDER` | `both` | `heimdall` / `gemini` / `both` |
+| `LLM_MODEL` | `default` | Heimdall model name |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name |
+| `LLM_TEMPERATURE` | `0.1` | LLM temperature (low = deterministic) |
+| `LLM_MAX_TOKENS` | `8192` | Max response tokens |
 | `CODE_AGENT_PROVIDER` | `none` | `opencode` / `gemini_cli` / `none` |
 | `CODE_AGENT_WORK_DIR` | `/tmp/muninn-workspace` | Agent workspace |
 | `CODE_AGENT_TIMEOUT` | `300` | Agent timeout (secs) |
@@ -233,5 +248,5 @@ flowchart LR
 ---
 
 *บันทึกโดย: AI Assistant (ISO/IEC 29110 SI Process)*
-*Created: 2026-03-16 | Updated: 2026-03-18 by Antigravity*
-*Sprint 2 completed: Code Agent CLI integration (OpenCode + Gemini CLI)*
+*Created: 2026-03-16 | Updated: 2026-03-20 by Antigravity*
+*Sprint 3 completed: Review Mode + Configurable LLM + Odin API endpoints (76 tests)*
