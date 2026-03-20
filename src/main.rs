@@ -4,7 +4,7 @@ use axum::{
     Router,
     routing::get,
 };
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, trace::TraceLayer, services::ServeDir};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod code_agent;
@@ -61,6 +61,7 @@ async fn main() {
         .route("/api/issues/{id}/reject", axum::routing::post(watcher::api::reject_fix))
         .route("/api/stats", get(watcher::api::get_stats))
         .route("/api/config", get(watcher::api::get_config))
+        .fallback_service(ServeDir::new("static"))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state);
