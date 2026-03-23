@@ -13,6 +13,7 @@ mod db;
 mod fixer;
 mod health;
 mod llm;
+mod mcp;
 mod models;
 mod watcher;
 
@@ -54,6 +55,8 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health::health_check))
         .route("/healthz", get(health::health_check))
+        // MCP Sidecar Engine
+        .route("/rpc", axum::routing::post(mcp::rpc_handler))
         .route("/api/issues", get(watcher::api::list_issues))
         .route("/api/issues/{id}", get(watcher::api::get_issue))
         .route("/api/issues/{id}/fix", axum::routing::post(watcher::api::trigger_fix))
